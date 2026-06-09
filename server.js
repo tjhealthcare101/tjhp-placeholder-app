@@ -1252,13 +1252,48 @@ function tjhpPriorAuthActionCenterWithinRange(row = {}, range = "all"){
   return ms >= cutoff;
 }
 
+function tjhpPriorAuthActionCenterPayerFilterValues(query = {}){
+  const values = [];
+  const pushValue = value => {
+    const raw = String(value || "").replace(/\s+/g, " ").trim();
+    if (!raw || raw.toLowerCase() === "all") return;
+    values.push(raw);
+  };
+  const pushDelimited = value => {
+    if (Array.isArray(value)) {
+      value.forEach(item => pushDelimited(item));
+      return;
+    }
+    String(value || "").split("||").forEach(pushValue);
+  };
+
+  if (query && query.pa_payers !== undefined) pushDelimited(query.pa_payers);
+  if (query && query.pa_payer !== undefined) {
+    if (Array.isArray(query.pa_payer)) query.pa_payer.forEach(pushDelimited);
+    else pushValue(query.pa_payer);
+  }
+
+  const seen = new Set();
+  return values.filter(payer => {
+    const key = (typeof tjhpRiPayerEntityKey === "function" ? tjhpRiPayerEntityKey(payer) : payer.toLowerCase()) || payer.toLowerCase();
+    if (!key || key === "all" || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function tjhpPriorAuthActionCenterFilterModel(org_id = "", query = {}){
   const allRows = getPriorAuthCases(org_id).map(normalizePriorAuthCase);
   const defaultRows = tjhpPriorAuthActionCenterRows(org_id).map(normalizePriorAuthCase);
 
   const search = String(query.pa_search || "").trim();
   const searchLower = search.toLowerCase();
-  const payer = String(query.pa_payer || "all").trim() || "all";
+  const payers = tjhpPriorAuthActionCenterPayerFilterValues(query);
+  const payerKeys = payers.map(payer => (typeof tjhpRiPayerEntityKey === "function" ? tjhpRiPayerEntityKey(payer) : payer.toLowerCase())).filter(Boolean);
+  const payerKeySet = new Set(payerKeys);
+  const payer = payers.length === 1 ? payers[0] : "all";
+  const payerFilterLabel = payers.join(" + ");
+  const hasMultiPayerFilter = payers.length > 1;
   const stage = tjhpPriorAuthNormalizeActionCenterStage(query.pa_stage || "all");
   const status = String(query.pa_status || "all").trim() || "all";
   const range = String(query.pa_range || "all").trim() || "all";
@@ -1266,7 +1301,7 @@ function tjhpPriorAuthActionCenterFilterModel(org_id = "", query = {}){
 
   const filterActive = Boolean(
     search ||
-    payer !== "all" ||
+    payers.length > 0 ||
     stage !== "all" ||
     status !== "all" ||
     range !== "all" ||
@@ -1276,7 +1311,10 @@ function tjhpPriorAuthActionCenterFilterModel(org_id = "", query = {}){
   const sourceRows = filterActive ? allRows : defaultRows;
 
   const rows = sourceRows.filter(row => {
-    if (payer !== "all" && String(row.payer || "") !== payer) return false;
+    if (payerKeySet.size > 0) {
+      const rowPayerKey = typeof tjhpRiPayerEntityKey === "function" ? tjhpRiPayerEntityKey(row.payer || "") : String(row.payer || "").toLowerCase().trim();
+      if (!payerKeySet.has(rowPayerKey)) return false;
+    } else if (payer !== "all" && String(row.payer || "") !== payer) return false;
     if (status !== "all" && String(row.status || "") !== status) return false;
     if (stage !== "all" && tjhpPriorAuthLifecycleGroupForRow(row) !== stage) return false;
     if (!tjhpPriorAuthActionCenterWithinRange(row, range)) return false;
@@ -1337,6 +1375,10 @@ function tjhpPriorAuthActionCenterFilterModel(org_id = "", query = {}){
     filterActive,
     search,
     payer,
+    payers,
+    payer_keys: payerKeys,
+    payer_filter_label: payerFilterLabel,
+    has_multi_payer_filter: hasMultiPayerFilter,
     stage,
     status,
     range,
@@ -1796,6 +1838,7 @@ function tjhpPriorAuthActionCenterRows(org_id){
 // PHASE_9B_RI8_FORECAST_PA_FORECAST_ONLY_LABEL_POLISH_OK
 // PHASE_9B_RI9_FORECAST_CONTROL_VALUE_LABEL_CLEANUP_OK
 // PHASE_9B_RI10_FORECAST_BASELINE_AR90_LABEL_CONTROL_POLISH_OK
+// PHASE_9B_RI11_DEEP_DIVE_TWO_PAYER_PA_WORK_LINK_RISK_WORDING_OK
 
 function tjhpDashboardStatusTone(verdictTitle = "", hasData = false){
   const title = String(verdictTitle || "").toLowerCase();
@@ -48838,6 +48881,34 @@ function tjhpRevenueIntelligenceDeepDivePriorAuthSignal(org_id = "", p1 = "", p2
   return { left, right, has_signal, leftRisk, rightRisk, higherPriorAuthFriction, summary, exact_match_only: true, related_family_matches, payer_unmatched_reason };
 }
 
+function tjhpDeepDivePriorAuthComparedWorkHref(priorAuthSignal = {}, fallbackPayers = []){
+  const candidates = [
+    priorAuthSignal && priorAuthSignal.left ? priorAuthSignal.left.payer : "",
+    priorAuthSignal && priorAuthSignal.right ? priorAuthSignal.right.payer : "",
+    ...(fallbackPayers || [])
+  ];
+  const seen = new Set();
+  const payers = [];
+  candidates.forEach(value => {
+    const payer = tjhpRiPayerDisplayName(value);
+    const key = tjhpRiPayerEntityKey(payer);
+    if (!payer || !key || seen.has(key)) return;
+    seen.add(key);
+    payers.push(payer);
+  });
+  if (payers.length > 1) return `/actions?tab=prior-auth&pa_payers=${encodeURIComponent(payers.join("||"))}&pa_sort=priority`;
+  if (payers.length === 1) return `/actions?tab=prior-auth&pa_payer=${encodeURIComponent(payers[0])}&pa_sort=priority`;
+  return "/actions?tab=prior-auth&pa_sort=priority";
+}
+
+function tjhpDeepDiveRiskGapText(insights = {}, dataContext = {}){
+  if (dataContext.any_prior_auth_only) return "No claims/payment history for one payer";
+  const payer = tjhpDeepDiveSafeText(insights.higherRiskPayer || "");
+  const riskDelta = Number(insights.riskDelta || 0);
+  if (!payer || Math.abs(riskDelta) <= 0) return "At-risk exposure is similar";
+  return `${payer} has ${tjhpDeepDiveMoney(Math.abs(riskDelta))} more at-risk exposure`;
+}
+
 function buildDeepDiveExecutiveInsights(deepDive) {
   const dd = deepDive || {}, p1 = tjhpDeepDivePayerName(dd.p1), p2 = tjhpDeepDivePayerName(dd.p2), i1 = dd.i1 || {}, i2 = dd.i2 || {};
   const a = x=>tjhpDeepDiveNum(x), mv=tjhpDeepDiveMetricValue;
@@ -48871,6 +48942,8 @@ function renderDeepDiveTab(org, payerRanks, m, deepDiveB64, p1, p2){
   const i1 = insights.i1 || {}, i2 = insights.i2 || {};
   const dataContext = tjhpRevenueIntelligenceDeepDivePayerDataContext(payerUniverse, insights.p1, insights.p2, dd);
   const priorAuthSignal = tjhpRevenueIntelligenceDeepDivePriorAuthSignal(org.org_id, insights.p1, insights.p2);
+  const comparedPriorAuthWorkHref = tjhpDeepDivePriorAuthComparedWorkHref(priorAuthSignal, [insights.p1, insights.p2]);
+  const riskGapText = tjhpDeepDiveRiskGapText(insights, dataContext);
   const paStaleExpiringCount = model => Number(model.stale_pending_count || 0) + Number(model.expiring_count || 0) + Number(model.appeal_follow_up_due_count || 0);
   const priorAuthMetricCell = (model, metricKey) => metricKey === "needs" ? `<div class="ri-pa-signal-value"><strong>${formatNumberUI(model.needs_action_count || 0)}</strong></div>` : metricKey === "denied" ? `<div class="ri-pa-signal-value"><strong>${formatNumberUI(model.denied_partial_count || 0)}</strong></div>` : metricKey === "stale" ? `<div class="ri-pa-signal-value"><strong>${formatNumberUI(paStaleExpiringCount(model))}</strong></div>` : metricKey === "revenue" ? `<div class="ri-pa-signal-value"><strong>${tjhpRevenueIntelligencePriorAuthRevenueText(model)}</strong></div>` : `<div class="ri-pa-signal-empty">-</div>`;
   const priorAuthMini = model => model.has_signal ? `${formatNumberUI(model.needs_action_count || 0)} needing action · ${formatNumberUI(model.denied_partial_count || 0)} denied/partial` : "-";
@@ -48882,7 +48955,7 @@ function renderDeepDiveTab(org, payerRanks, m, deepDiveB64, p1, p2){
   const priorAuthSignalBlock = `
     <div class="ri-prior-auth-signal" style="margin-top:12px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);">
       <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;"><div><div style="font-weight:900;">Prior Authorization Signal ${infoIcon("Pre-service prior-auth friction by exact payer entity. This does not change the Deep Dive score; it adds context for prioritization.")}</div><div class="muted small" style="margin-top:4px;">Pre-service authorization work that may affect downstream revenue.</div></div>${priorAuthSignal.has_signal ? `<div class="badge neutral">Decision context only</div>` : ""}</div>
-      ${priorAuthSignal.has_signal ? `<div class="ri-prior-auth-grid" style="display:grid;grid-template-columns:1.2fr repeat(2,minmax(160px,1fr));gap:8px;margin-top:12px;"><div class="muted small ri-pa-signal-row" style="font-weight:900;">Signal</div><div class="muted small" style="font-weight:900;">${tjhpDeepDiveSafeText(priorAuthSignal.left.payer)}${contextForPayer(priorAuthSignal.left.payer).prior_auth_only ? ` <span class="badge neutral">Prior-auth data only</span>` : ""}</div><div class="muted small" style="font-weight:900;">${tjhpDeepDiveSafeText(priorAuthSignal.right.payer)}${contextForPayer(priorAuthSignal.right.payer).prior_auth_only ? ` <span class="badge neutral">Prior-auth data only</span>` : ""}</div><div class="muted small ri-pa-signal-row">Prior auths needing action</div>${priorAuthMetricCell(priorAuthSignal.left, "needs")}${priorAuthMetricCell(priorAuthSignal.right, "needs")}<div class="muted small ri-pa-signal-row">Denied / partial / appeal-needed</div>${priorAuthMetricCell(priorAuthSignal.left, "denied")}${priorAuthMetricCell(priorAuthSignal.right, "denied")}<div class="muted small ri-pa-signal-row">Stale / expiring / follow-up due</div>${priorAuthMetricCell(priorAuthSignal.left, "stale")}${priorAuthMetricCell(priorAuthSignal.right, "stale")}<div class="muted small ri-pa-signal-row">Known pre-service revenue at risk</div>${priorAuthMetricCell(priorAuthSignal.left, "revenue")}${priorAuthMetricCell(priorAuthSignal.right, "revenue")}</div><div class="muted small" style="margin-top:10px;">${tjhpDeepDiveSafeText(priorAuthSignal.summary)} Prior Authorization Signal is decision context only and does not change the Deep Dive score.</div><div class="muted small" style="margin-top:8px;">Prior auth work: <a href="/actions?tab=prior-auth&pa_payer=${encodeURIComponent(priorAuthSignal.higherPriorAuthFriction || priorAuthSignal.left.payer || priorAuthSignal.right.payer || "")}&pa_sort=priority">Open Prior Auth Work</a></div>` : `<div class="muted small" style="margin-top:10px;">No prior-auth comparison signal for these payers yet.</div>${relatedFamilyNote}`}
+      ${priorAuthSignal.has_signal ? `<div class="ri-prior-auth-grid" style="display:grid;grid-template-columns:1.2fr repeat(2,minmax(160px,1fr));gap:8px;margin-top:12px;"><div class="muted small ri-pa-signal-row" style="font-weight:900;">Signal</div><div class="muted small" style="font-weight:900;">${tjhpDeepDiveSafeText(priorAuthSignal.left.payer)}${contextForPayer(priorAuthSignal.left.payer).prior_auth_only ? ` <span class="badge neutral">Prior-auth data only</span>` : ""}</div><div class="muted small" style="font-weight:900;">${tjhpDeepDiveSafeText(priorAuthSignal.right.payer)}${contextForPayer(priorAuthSignal.right.payer).prior_auth_only ? ` <span class="badge neutral">Prior-auth data only</span>` : ""}</div><div class="muted small ri-pa-signal-row">Prior auths needing action</div>${priorAuthMetricCell(priorAuthSignal.left, "needs")}${priorAuthMetricCell(priorAuthSignal.right, "needs")}<div class="muted small ri-pa-signal-row">Denied / partial / appeal-needed</div>${priorAuthMetricCell(priorAuthSignal.left, "denied")}${priorAuthMetricCell(priorAuthSignal.right, "denied")}<div class="muted small ri-pa-signal-row">Stale / expiring / follow-up due</div>${priorAuthMetricCell(priorAuthSignal.left, "stale")}${priorAuthMetricCell(priorAuthSignal.right, "stale")}<div class="muted small ri-pa-signal-row">Known pre-service revenue at risk</div>${priorAuthMetricCell(priorAuthSignal.left, "revenue")}${priorAuthMetricCell(priorAuthSignal.right, "revenue")}</div><div class="muted small" style="margin-top:10px;">${tjhpDeepDiveSafeText(priorAuthSignal.summary)} Prior Authorization Signal is decision context only and does not change the Deep Dive score.</div><div class="muted small" style="margin-top:8px;">Prior auth work: <a href="${safeStr(comparedPriorAuthWorkHref)}">Open Prior Auth Work</a></div>` : `<div class="muted small" style="margin-top:10px;">No prior-auth comparison signal for these payers yet.</div>${relatedFamilyNote}`}
     </div>`;
   const priorAuthActionBullets = priorAuthSignal.has_signal ? [priorAuthSignal.higherPriorAuthFriction ? `Review ${priorAuthSignal.higherPriorAuthFriction} prior-auth denials, partial approvals, stale pending cases, or expiring authorizations before prioritizing downstream claim work.` : `Prior-auth friction is similar for ${insights.p1} and ${insights.p2}; use claim-level exposure to prioritize next actions.`] : [];
   const keyDriverBullets = priorAuthSignal.has_signal ? [...(insights.keyDrivers || []), priorAuthSignal.summary] : (insights.keyDrivers || []);
@@ -48896,7 +48969,7 @@ function renderDeepDiveTab(org, payerRanks, m, deepDiveB64, p1, p2){
     return `<div style="flex:1;min-width:300px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);"><div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;"><div><div style="font-weight:900;font-size:16px;">${tjhpDeepDiveSafeText(name)}</div><div class="muted small">${finalTags.map(t=>`<span class="badge neutral" style="margin-right:4px;">${tjhpDeepDiveSafeText(t)}</span>`).join("")}</div></div>${scoreHtml}</div>${noClaimsText(ctx)}<div class="hr"></div><div class="muted small" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;">${metric("Denial rate", tjhpDeepDivePct(i.denialRate))}${metric("Total at-risk", tjhpDeepDiveMoney(i.totalAtRisk||i.atRisk))}${metric("Denied exposure", tjhpDeepDiveMoney(i.deniedExposure||i.totalDeniedDollars))}${metric("Underpaid exposure", tjhpDeepDiveMoney(i.underpaidExposure||i.totalUnderpaidDollars))}<div><strong>Prior-auth signal:</strong> ${tjhpDeepDiveSafeText(priorAuthMini(priorAuthInfo))}</div><div><strong>Days-to-pay score:</strong> ${ctx.prior_auth_only ? "-" : tjhpDeepDiveNum(i.daysToPayScore).toFixed(1)}</div></div></div>`;
   };
   const keyDifferences = dataContext.any_prior_auth_only ? `<li>Claims/payment comparison is limited because ${(dataContext.left.prior_auth_only ? tjhpDeepDiveSafeText(dataContext.left.payer) : tjhpDeepDiveSafeText(dataContext.right.payer))} currently has prior-auth data only.</li><li>Deep Dive score math remains based on uploaded claims/payment metrics only.</li>` : `<li>${tjhpDeepDiveSafeText(insights.winner)} leads by ${insights.scoreDelta.toFixed(1)} score points.</li><li>${tjhpDeepDiveSafeText(insights.higherRiskPayer)} carries ${tjhpDeepDiveMoney(insights.riskDelta)} more total at-risk exposure.</li><li>Denial rate difference: ${tjhpDeepDivePct(insights.denialRateDelta)}.</li><li>Underpayment difference: ${tjhpDeepDiveMoney(insights.underpaidDelta)}.</li><li>Denied exposure difference: ${tjhpDeepDiveMoney(insights.deniedDelta)}.</li>${insights.daysToPayWinner?`<li>${tjhpDeepDiveSafeText(insights.daysToPayWinner)} has stronger days-to-pay score.</li>`:""}`;
-  return `<div class="executive-panel"><div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-end;flex-wrap:wrap;"><div><h3 style="margin:0;">Deep Dive Analytics ${infoIcon("Compare two payers side-by-side. Uses live payer intelligence metrics (A–F) and exposure dollars.")}</h3><div class="muted small" style="margin-top:6px;">Enterprise-style payer comparison and decision support.</div></div><div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn secondary small tjhp-no-print" type="button" onclick="return window.tjhpPrintRevenueIntelligence('Deep Dive Analytics')">Print Deep Dive Analytics</button></div></div><div class="hr"></div><form method="GET" action="/revenue-intelligence" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;"><input type="hidden" name="tab" value="deep-dive"/><select name="p1">${payerOptionsHtml(insights.p1)}</select><select name="p2">${payerOptionsHtml(insights.p2)}</select><button class="btn primary small" type="submit">Compare Payers</button></form>${dataContextNotes}<div style="margin-top:12px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);"><div style="font-weight:900;">Executive Decision Summary</div><div class="muted small" style="display:grid;grid-template-columns:repeat(2,minmax(240px,1fr));gap:8px;margin-top:8px;"><div><strong>Overall stronger payer</strong><div>${dataContext.any_prior_auth_only ? "Claims/payment comparison limited" : `${tjhpDeepDiveSafeText(insights.winner)} (${insights.scoreDelta.toFixed(1)} point lead)`}</div><div>Higher score is better</div></div><div><strong>Higher-risk payer</strong><div>${dataContext.any_prior_auth_only ? "No claims/payment history for one payer" : `${tjhpDeepDiveSafeText(insights.higherRiskPayer)} (${tjhpDeepDiveMoney(insights.riskDelta)} delta)`}</div><div>Higher at-risk exposure needs follow-up</div></div><div><strong>Primary risk driver</strong><div>${dataContext.any_prior_auth_only ? "Prior-auth data only for one payer" : tjhpDeepDiveSafeText(insights.primaryRiskDriver)}</div></div><div><strong>Recommended focus</strong><div>${dataContext.any_prior_auth_only ? tjhpDeepDiveSafeText(limitedSummary) : tjhpDeepDiveSafeText(insights.strategicRecommendation)}</div></div></div></div>${priorAuthSignalBlock}<div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:12px;">${payerCard(insights.p1,i1,[!dataContext.any_prior_auth_only && insights.winner===insights.p1?'Stronger overall':'',!dataContext.any_prior_auth_only && insights.higherRiskPayer===insights.p1?'Higher risk':'',!dataContext.any_prior_auth_only && tjhpDeepDiveNum(i1.denialRate)>tjhpDeepDiveNum(i2.denialRate)?'Higher denial pressure':'',!dataContext.any_prior_auth_only && tjhpDeepDiveNum(i1.underpaidExposure)>tjhpDeepDiveNum(i2.underpaidExposure)?'Higher underpayment exposure':''].filter(Boolean), priorAuthSignal.left)}${payerCard(insights.p2,i2,[!dataContext.any_prior_auth_only && insights.winner===insights.p2?'Stronger overall':'',!dataContext.any_prior_auth_only && insights.higherRiskPayer===insights.p2?'Higher risk':'',!dataContext.any_prior_auth_only && tjhpDeepDiveNum(i2.denialRate)>tjhpDeepDiveNum(i1.denialRate)?'Higher denial pressure':'',!dataContext.any_prior_auth_only && tjhpDeepDiveNum(i2.underpaidExposure)>tjhpDeepDiveNum(i1.underpaidExposure)?'Higher underpayment exposure':''].filter(Boolean), priorAuthSignal.right)}</div><div style="margin-top:12px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);"><div style="font-weight:900;">Key Differences</div><ul class="muted small" style="line-height:1.7;">${keyDifferences}</ul></div><div style="margin-top:12px;"><div style="font-weight:900;margin-bottom:6px;">Visual Comparison</div><div class="muted small" style="margin-bottom:8px;">Charts support the summary above. Use the executive summary and key differences for the decision view.</div><div style="display:flex;gap:12px;flex-wrap:wrap;"><div style="flex:1;min-width:360px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);"><div style="font-weight:900;">Comparison Scorecard</div><div class="hr"></div><div class="chart-container payer" style="height:260px;max-height:260px;"><canvas id="riCompareBars"></canvas></div><div class="muted small" style="margin-top:8px;">${dataContext.any_prior_auth_only ? "One selected payer has no claims/payment score yet; score chart remains based on uploaded claims/payment metrics only." : tjhpDeepDiveSafeText(insights.chartTakeaways.scorecard)}</div></div><div style="flex:1;min-width:360px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);"><div style="font-weight:900;">Exposure Breakdown</div><div class="hr"></div><div class="chart-container payer" style="height:260px;max-height:260px;"><canvas id="riExposureBars"></canvas></div><div class="muted small" style="margin-top:8px;">${dataContext.any_prior_auth_only ? "Claim/payment exposure is unavailable for prior-auth-only payers until claim/payment history is uploaded." : tjhpDeepDiveSafeText(insights.chartTakeaways.exposure)}</div></div></div></div><div style="margin-top:18px;border:1px solid var(--border);border-radius:14px;padding:18px;background:var(--card);"><div style="font-weight:900;font-size:15px;margin-bottom:10px;">Executive Board Analysis</div><div><strong>What this means</strong><ul class="muted small"><li>${tjhpDeepDiveSafeText(limitedSummary)}</li>${priorAuthActionBullets.map(x=>`<li>${tjhpDeepDiveSafeText(x)}</li>`).join('')}</ul><strong>Key drivers</strong><ul class="muted small">${keyDriverBullets.map(x=>`<li>${tjhpDeepDiveSafeText(x)}</li>`).join('')}</ul><strong>Recommended actions</strong><ul class="muted small">${recommendedActionBullets.map(x=>`<li>${tjhpDeepDiveSafeText(x)}</li>`).join('')}</ul><strong>Next 30-day priorities</strong><ul class="muted small">${nextPriorityBullets.map(x=>`<li>${tjhpDeepDiveSafeText(x)}</li>`).join('')}</ul><strong>Watchouts</strong><ul class="muted small">${(insights.watchouts||[]).map(x=>`<li>${tjhpDeepDiveSafeText(x)}</li>`).join('')}</ul></div></div><script>(function(){const dd=JSON.parse(atob("${deepDiveB64}"));const i1=dd.i1||null;const i2=dd.i2||null;function initDeepDiveCharts(){if(typeof Chart==="undefined"){setTimeout(initDeepDiveCharts,50);return;}if(!i1||!i2)return;const ctx1=document.getElementById("riCompareBars");const ctx2=document.getElementById("riExposureBars");if(!ctx1||!ctx2)return;const labels=[i1.payerName||dd.p1,i2.payerName||dd.p2];new Chart(ctx1,{type:"bar",data:{labels,datasets:[{label:"Score (0–100)",data:[Number(i1.score||0),Number(i2.score||0)]},{label:"Denial Rate % (lower better)",data:[Number(i1.denialRate||0),Number(i2.denialRate||0)]},{label:"Days-to-Pay Score (higher better)",data:[Number(i1.daysToPayScore||0),Number(i2.daysToPayScore||0)]}]},options:{responsive:true,maintainAspectRatio:false}});new Chart(ctx2,{type:"bar",data:{labels,datasets:[{label:"Denied $ (est.)",data:[Number(i1.totalDeniedDollars||i1.deniedExposure||0),Number(i2.totalDeniedDollars||i2.deniedExposure||0)]},{label:"Underpaid $ (est.)",data:[Number(i1.totalUnderpaidDollars||i1.underpaidExposure||0),Number(i2.totalUnderpaidDollars||i2.underpaidExposure||0)]},{label:"At Risk $ (total)",data:[Number(i1.totalAtRisk||i1.atRisk||0),Number(i2.totalAtRisk||i2.atRisk||0)]}]},options:{responsive:true,maintainAspectRatio:false,scales:{y:{ticks:{callback:(v)=>(window.moneyFmt?window.moneyFmt(v):v)}}}}});}initDeepDiveCharts();})();</script></div>`;
+  return `<div class="executive-panel"><div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-end;flex-wrap:wrap;"><div><h3 style="margin:0;">Deep Dive Analytics ${infoIcon("Compare two payers side-by-side. Uses live payer intelligence metrics (A–F) and exposure dollars.")}</h3><div class="muted small" style="margin-top:6px;">Enterprise-style payer comparison and decision support.</div></div><div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn secondary small tjhp-no-print" type="button" onclick="return window.tjhpPrintRevenueIntelligence('Deep Dive Analytics')">Print Deep Dive Analytics</button></div></div><div class="hr"></div><form method="GET" action="/revenue-intelligence" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;"><input type="hidden" name="tab" value="deep-dive"/><select name="p1">${payerOptionsHtml(insights.p1)}</select><select name="p2">${payerOptionsHtml(insights.p2)}</select><button class="btn primary small" type="submit">Compare Payers</button></form>${dataContextNotes}<div style="margin-top:12px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);"><div style="font-weight:900;">Executive Decision Summary</div><div class="muted small" style="display:grid;grid-template-columns:repeat(2,minmax(240px,1fr));gap:8px;margin-top:8px;"><div><strong>Overall stronger payer</strong><div>${dataContext.any_prior_auth_only ? "Claims/payment comparison limited" : `${tjhpDeepDiveSafeText(insights.winner)} (${insights.scoreDelta.toFixed(1)} point lead)`}</div><div>Higher score is better</div></div><div><strong>Higher-risk payer</strong><div>${riskGapText}</div><div>Higher at-risk exposure needs follow-up</div></div><div><strong>Primary risk driver</strong><div>${dataContext.any_prior_auth_only ? "Prior-auth data only for one payer" : tjhpDeepDiveSafeText(insights.primaryRiskDriver)}</div></div><div><strong>Recommended focus</strong><div>${dataContext.any_prior_auth_only ? tjhpDeepDiveSafeText(limitedSummary) : tjhpDeepDiveSafeText(insights.strategicRecommendation)}</div></div></div></div>${priorAuthSignalBlock}<div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:12px;">${payerCard(insights.p1,i1,[!dataContext.any_prior_auth_only && insights.winner===insights.p1?'Stronger overall':'',!dataContext.any_prior_auth_only && insights.higherRiskPayer===insights.p1?'Higher risk':'',!dataContext.any_prior_auth_only && tjhpDeepDiveNum(i1.denialRate)>tjhpDeepDiveNum(i2.denialRate)?'Higher denial pressure':'',!dataContext.any_prior_auth_only && tjhpDeepDiveNum(i1.underpaidExposure)>tjhpDeepDiveNum(i2.underpaidExposure)?'Higher underpayment exposure':''].filter(Boolean), priorAuthSignal.left)}${payerCard(insights.p2,i2,[!dataContext.any_prior_auth_only && insights.winner===insights.p2?'Stronger overall':'',!dataContext.any_prior_auth_only && insights.higherRiskPayer===insights.p2?'Higher risk':'',!dataContext.any_prior_auth_only && tjhpDeepDiveNum(i2.denialRate)>tjhpDeepDiveNum(i1.denialRate)?'Higher denial pressure':'',!dataContext.any_prior_auth_only && tjhpDeepDiveNum(i2.underpaidExposure)>tjhpDeepDiveNum(i1.underpaidExposure)?'Higher underpayment exposure':''].filter(Boolean), priorAuthSignal.right)}</div><div style="margin-top:12px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);"><div style="font-weight:900;">Key Differences</div><ul class="muted small" style="line-height:1.7;">${keyDifferences}</ul></div><div style="margin-top:12px;"><div style="font-weight:900;margin-bottom:6px;">Visual Comparison</div><div class="muted small" style="margin-bottom:8px;">Charts support the summary above. Use the executive summary and key differences for the decision view.</div><div style="display:flex;gap:12px;flex-wrap:wrap;"><div style="flex:1;min-width:360px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);"><div style="font-weight:900;">Comparison Scorecard</div><div class="hr"></div><div class="chart-container payer" style="height:260px;max-height:260px;"><canvas id="riCompareBars"></canvas></div><div class="muted small" style="margin-top:8px;">${dataContext.any_prior_auth_only ? "One selected payer has no claims/payment score yet; score chart remains based on uploaded claims/payment metrics only." : tjhpDeepDiveSafeText(insights.chartTakeaways.scorecard)}</div></div><div style="flex:1;min-width:360px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);"><div style="font-weight:900;">Exposure Breakdown</div><div class="hr"></div><div class="chart-container payer" style="height:260px;max-height:260px;"><canvas id="riExposureBars"></canvas></div><div class="muted small" style="margin-top:8px;">${dataContext.any_prior_auth_only ? "Claim/payment exposure is unavailable for prior-auth-only payers until claim/payment history is uploaded." : tjhpDeepDiveSafeText(insights.chartTakeaways.exposure)}</div></div></div></div><div style="margin-top:18px;border:1px solid var(--border);border-radius:14px;padding:18px;background:var(--card);"><div style="font-weight:900;font-size:15px;margin-bottom:10px;">Executive Board Analysis</div><div><strong>What this means</strong><ul class="muted small"><li>${tjhpDeepDiveSafeText(limitedSummary)}</li>${priorAuthActionBullets.map(x=>`<li>${tjhpDeepDiveSafeText(x)}</li>`).join('')}</ul><strong>Key drivers</strong><ul class="muted small">${keyDriverBullets.map(x=>`<li>${tjhpDeepDiveSafeText(x)}</li>`).join('')}</ul><strong>Recommended actions</strong><ul class="muted small">${recommendedActionBullets.map(x=>`<li>${tjhpDeepDiveSafeText(x)}</li>`).join('')}</ul><strong>Next 30-day priorities</strong><ul class="muted small">${nextPriorityBullets.map(x=>`<li>${tjhpDeepDiveSafeText(x)}</li>`).join('')}</ul><strong>Watchouts</strong><ul class="muted small">${(insights.watchouts||[]).map(x=>`<li>${tjhpDeepDiveSafeText(x)}</li>`).join('')}</ul></div></div><script>(function(){const dd=JSON.parse(atob("${deepDiveB64}"));const i1=dd.i1||null;const i2=dd.i2||null;function initDeepDiveCharts(){if(typeof Chart==="undefined"){setTimeout(initDeepDiveCharts,50);return;}if(!i1||!i2)return;const ctx1=document.getElementById("riCompareBars");const ctx2=document.getElementById("riExposureBars");if(!ctx1||!ctx2)return;const labels=[i1.payerName||dd.p1,i2.payerName||dd.p2];new Chart(ctx1,{type:"bar",data:{labels,datasets:[{label:"Score (0–100)",data:[Number(i1.score||0),Number(i2.score||0)]},{label:"Denial Rate % (lower better)",data:[Number(i1.denialRate||0),Number(i2.denialRate||0)]},{label:"Days-to-Pay Score (higher better)",data:[Number(i1.daysToPayScore||0),Number(i2.daysToPayScore||0)]}]},options:{responsive:true,maintainAspectRatio:false}});new Chart(ctx2,{type:"bar",data:{labels,datasets:[{label:"Denied $ (est.)",data:[Number(i1.totalDeniedDollars||i1.deniedExposure||0),Number(i2.totalDeniedDollars||i2.deniedExposure||0)]},{label:"Underpaid $ (est.)",data:[Number(i1.totalUnderpaidDollars||i1.underpaidExposure||0),Number(i2.totalUnderpaidDollars||i2.underpaidExposure||0)]},{label:"At Risk $ (total)",data:[Number(i1.totalAtRisk||i1.atRisk||0),Number(i2.totalAtRisk||i2.atRisk||0)]}]},options:{responsive:true,maintainAspectRatio:false,scales:{y:{ticks:{callback:(v)=>(window.moneyFmt?window.moneyFmt(v):v)}}}}});}initDeepDiveCharts();})();</script></div>`;
 }
 function renderRevenueAIConsole({ org, parsed }){
   const saved = getSavedQueries(org.org_id)
@@ -55084,9 +55157,11 @@ if (method === "GET" && pathname === "/actions") {
 
     const priorAuthStageOptions = tjhpPriorAuthActionCenterStageOptions();
 
-    const priorAuthFilterSummary = priorAuthFilterModel.filterActive
-      ? `Showing ${formatNumberUI(priorAuthActionRows.length)} of ${formatNumberUI(priorAuthFilterModel.allRows.length)} prior-auth cases for selected filters.`
-      : `Showing ${formatNumberUI(priorAuthActionRows.length)} prior-auth cases needing staff attention.`;
+    const priorAuthFilterSummary = priorAuthFilterModel.has_multi_payer_filter
+      ? `Showing ${formatNumberUI(priorAuthActionRows.length)} of ${formatNumberUI(priorAuthFilterModel.allRows.length)} prior-auth cases for ${priorAuthFilterModel.payer_filter_label}.`
+      : priorAuthFilterModel.filterActive
+        ? `Showing ${formatNumberUI(priorAuthActionRows.length)} of ${formatNumberUI(priorAuthFilterModel.allRows.length)} prior-auth cases for selected filters.`
+        : `Showing ${formatNumberUI(priorAuthActionRows.length)} prior-auth cases needing staff attention.`;
 
     const priorAuthActionHref = (x, kind) => {
       const id = encodeURIComponent(x.auth_case_id || "");
@@ -55192,6 +55267,7 @@ if (method === "GET" && pathname === "/actions") {
       <div class="insight-card prior-auth-action-center-filter-card" style="margin-top:10px;">
         <form method="GET" action="/actions" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;align-items:end;">
           <input type="hidden" name="tab" value="prior-auth" />
+          ${priorAuthFilterModel.has_multi_payer_filter ? `<input type="hidden" name="pa_payers" value="${safeStr(priorAuthFilterModel.payers.join("||"))}" />` : ""}
 
           <div>
             <label class="small">Search</label>
@@ -55249,6 +55325,7 @@ if (method === "GET" && pathname === "/actions") {
         <p class="muted small" style="margin:8px 0 0;">
           ${safeStr(priorAuthFilterSummary)}
           ${priorAuthFilterModel.stage !== "all" ? ` · Stage: ${safeStr(tjhpPriorAuthActionCenterStageLabel(priorAuthFilterModel.stage))}` : ""}
+          ${priorAuthFilterModel.has_multi_payer_filter ? `<br/><span class="badge neutral">Showing prior auths for ${safeStr(priorAuthFilterModel.payer_filter_label)}</span>` : ""}
         </p>
       </div>
 
@@ -72623,6 +72700,131 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS === "true" && (p
 
     process.stdout.write("REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS_PASSED\n"); process.exit(0);
   } catch (err) { process.stderr.write("REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
+}
+
+
+if (process.env.TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_TWO_PAYER_PA_WORK_LINK_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const src = fs.readFileSync(__filename, "utf8");
+    const assert = require("assert");
+    const assertIncludes = (haystack, needle, message) => assert(String(haystack || "").includes(needle), message || `missing ${needle}`);
+    const extractFunctionSourceForSmoke = (name) => {
+      const start = src.indexOf("function " + name);
+      assert(start >= 0, "missing function: " + name);
+      const open = src.indexOf("{", start);
+      let depth = 0;
+      for (let i = open; i < src.length; i += 1) {
+        if (src[i] === "{") depth += 1;
+        else if (src[i] === "}" && --depth === 0) return src.slice(start, i + 1);
+      }
+      throw new Error("unterminated function: " + name);
+    };
+    const extractFunctionBodyForSmoke = (name) => {
+      const fn = extractFunctionSourceForSmoke(name);
+      return fn.slice(fn.indexOf("{") + 1, -1);
+    };
+
+    [
+      "PHASE_9B_RI11_DEEP_DIVE_TWO_PAYER_PA_WORK_LINK_RISK_WORDING_OK",
+      "PHASE_9B_RI10_FORECAST_BASELINE_AR90_LABEL_CONTROL_POLISH_OK",
+      "PHASE_9B_RI2_DEEP_DIVE_PRIOR_AUTH_PAYER_UNIVERSE_OK",
+      "PHASE_9B_RI1_DEEP_DIVE_PRIOR_AUTH_SIGNAL_OK",
+      "tjhpPriorAuthActionCenterPayerFilterValues",
+      "tjhpDeepDivePriorAuthComparedWorkHref",
+      "tjhpDeepDiveRiskGapText",
+      "pa_payers",
+      "Open Prior Auth Work",
+      "more at-risk exposure"
+    ].forEach(x => assertIncludes(src, x));
+
+    const renderDeepDiveSlice = src.slice(src.indexOf("function renderDeepDiveTab(org, payerRanks, m, deepDiveB64, p1, p2){"), src.indexOf("function renderRevenueAIConsole"));
+    ["riskDelta)} delta", "higherPriorAuthFriction || priorAuthSignal.left.payer", "pa_payer=${encodeURIComponent(priorAuthSignal.higherPriorAuthFriction"].forEach(x => assert(!renderDeepDiveSlice.includes(x), `stale deep dive link or delta wording found: ${x}`));
+
+    [
+      "TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_PRIOR_AUTH_PAYER_UNIVERSE_SMOKE_TESTS",
+      "TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_PRIOR_AUTH_SIGNAL_SMOKE_TESTS",
+      "TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_EXECUTIVE_SMOKE_TESTS",
+      "TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS",
+      "TJHP_REVENUE_INTELLIGENCE_FORECAST_BASELINE_AR90_LABEL_CONTROL_POLISH_SMOKE_TESTS",
+      "TJHP_REVENUE_INTELLIGENCE_FORECAST_CONTROL_VALUE_LABEL_CLEANUP_SMOKE_TESTS",
+      "TJHP_REVENUE_INTELLIGENCE_FORECAST_PA_FORECAST_ONLY_POLISH_SMOKE_TESTS",
+      "TJHP_REVENUE_INTELLIGENCE_FORECAST_PA_CHART_POLISH_SMOKE_TESTS",
+      "TJHP_REVENUE_INTELLIGENCE_FORECAST_PA_PROJECTION_CHARTS_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX27_RANGE_FALLBACK_PLAN_CONTEXT_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX26_FRICTION_TIMELINE_READABILITY_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX25_FRICTION_REAL_EVENT_DATES_FINAL_SMOKE_TESTS",
+      "TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS",
+      "TJHP_DATA_MANAGEMENT_UNIFIED_UPLOAD_PRIOR_AUTH_SMOKE_TESTS",
+      "TJHP_PRIOR_AUTH_ACTION_CENTER_PANEL_SMOKE_TESTS",
+      "TJHP_PRIOR_AUTH_STATUS_PILLS_AND_LIFECYCLE_AGGREGATE_SMOKE_TESTS",
+      "TJHP_PRIOR_AUTH_CLAIMS_LIFECYCLE_LANE_POLISH_SMOKE_TESTS",
+      "TJHP_PAYMENT_MATCH_SMOKE_TESTS",
+      "renderClaimPanelBootstrap",
+      "window.openClaimPanel",
+      "renderPriorAuthActionCenterPanelBootstrap",
+      "window.openPriorAuthPanel"
+    ].forEach(x => assertIncludes(src, x, `protected marker missing ${x}`));
+
+    const forbidden = ["writeJSON", "saveUsage", "savePriorAuthCasesForOrg", "upsertPriorAuthCase", "appendAuditLog", "ensureAgentWorkspace", "requestOpenAIChatCompletion", "fetchFHIRDocuments", "scrapePortal", "routePacket", "submitPacket", "OCR", "payer portal submission", "method === \"POST\"", "parseBody(req)"];
+    ["tjhpPriorAuthActionCenterPayerFilterValues", "tjhpPriorAuthActionCenterFilterModel", "tjhpDeepDivePriorAuthComparedWorkHref", "tjhpDeepDiveRiskGapText", "renderDeepDiveTab"].forEach(name => {
+      const body = extractFunctionBodyForSmoke(name);
+      forbidden.forEach(term => assert(!body.includes(term), `${name} should not include ${term}`));
+    });
+
+    const helperStart = src.indexOf("function tjhpDeepDiveNum(value) {");
+    const helperEnd = src.indexOf("function renderDeepDiveTab(org, payerRanks, m, deepDiveB64, p1, p2){");
+    eval(src.slice(helperStart, helperEnd));
+    const renderDeepDiveForRi11Smoke = eval("(" + extractFunctionSourceForSmoke("renderDeepDiveTab").replace("function renderDeepDiveTab", "function") + ")");
+
+    const fakeOrg = "__ri11_two_payer_pa_work_link_org__";
+    const snapshot = fs.existsSync(FILES.prior_auth_cases) ? fs.readFileSync(FILES.prior_auth_cases, "utf8") : "[]";
+    try {
+      const baseRows = readJSON(FILES.prior_auth_cases, []).filter(x => x.org_id !== fakeOrg);
+      writeJSON(FILES.prior_auth_cases, baseRows.concat([
+        { auth_case_id:"ri11-aetna", org_id:fakeOrg, payer:"Aetna", patient_name:"Amy Aetna", status:"Denied", requested_service:"MRI", submitted_date:"2026-01-01", estimated_revenue_at_risk:1133 },
+        { auth_case_id:"ri11-cigna", org_id:fakeOrg, payer:"Cigna", patient_name:"Cal Cigna", status:"Pending", requested_service:"CT", submitted_date:"2026-01-02", estimated_revenue_at_risk:700 },
+        { auth_case_id:"ri11-uhc", org_id:fakeOrg, payer:"UnitedHealthcare", patient_name:"Uma United", status:"Denied", requested_service:"PT", submitted_date:"2026-01-03", estimated_revenue_at_risk:900 },
+        { auth_case_id:"ri11-bcbstx", org_id:fakeOrg, payer:"Blue Cross Blue Shield of Texas", patient_name:"Bea Blue", status:"Denied", requested_service:"Infusion", submitted_date:"2026-01-04", estimated_revenue_at_risk:1200 }
+      ]));
+
+      const multi = tjhpPriorAuthActionCenterFilterModel(fakeOrg, { pa_payers:"Aetna||Cigna", pa_sort:"priority" });
+      const multiPayers = new Set(multi.rows.map(row => row.payer));
+      assert(multiPayers.has("Aetna"), "multi-payer filter missing Aetna");
+      assert(multiPayers.has("Cigna"), "multi-payer filter missing Cigna");
+      assert(!multiPayers.has("UnitedHealthcare"), "multi-payer filter included UnitedHealthcare");
+      assert.strictEqual(multi.has_multi_payer_filter, true, "multi-payer flag missing");
+      assertIncludes(multi.payer_filter_label, "Aetna");
+      assertIncludes(multi.payer_filter_label, "Cigna");
+      assert.strictEqual(multi.payer, "all", "multi-payer filter should leave single payer dropdown at all");
+
+      const single = tjhpPriorAuthActionCenterFilterModel(fakeOrg, { pa_payer:"Aetna", pa_sort:"priority" });
+      assert(single.rows.length >= 1, "single-payer filter missing Aetna row");
+      assert(single.rows.every(row => row.payer === "Aetna"), "single-payer filter included non-Aetna rows");
+      assert.strictEqual(single.has_multi_payer_filter, false, "single-payer filter incorrectly marked multi");
+
+      const sample = { p1:"Aetna", p2:"Cigna", i1:{ score:65, denialRate:18, underpaidExposure:900, deniedExposure:300, totalAtRisk:1200, daysToPayScore:70, totalBilled:2000, totalPaid:800 }, i2:{ score:78, denialRate:7, underpaidExposure:40, deniedExposure:27, totalAtRisk:67, daysToPayScore:86, totalBilled:2000, totalPaid:1700 } };
+      const html = renderDeepDiveForRi11Smoke({ org_id:fakeOrg }, [{ payer:"Aetna", score:65 }, { payer:"Cigna", score:78 }], {}, Buffer.from(JSON.stringify(sample), "utf8").toString("base64"), "Aetna", "Cigna");
+      ["Prior Authorization Signal", "Open Prior Auth Work", "pa_payers=", "Aetna", "Cigna", "pa_sort=priority", "more at-risk exposure", "Decision context only", "Prior Authorization Signal is decision context only and does not change the Deep Dive score"].forEach(x => assertIncludes(html, x, `render missing ${x}`));
+      assert(!html.includes("pa_payer=Aetna&pa_sort=priority"), "deep dive work link used only Aetna when both compared payers exist");
+      ["delta)", " delta", "Delta"].forEach(x => assert(!html.includes(x), `Executive Decision Summary should not include ${x}`));
+
+      const blueSignal = tjhpRevenueIntelligenceDeepDivePriorAuthSignal(fakeOrg, "BlueCross", "Cigna");
+      assert.strictEqual(blueSignal.left.denied_partial_count, 0, "BlueCross should not count BCBS Texas exact payer row");
+      assert((blueSignal.related_family_matches || []).some(x => x.payer === "Blue Cross Blue Shield of Texas"), "related-family note should remain available");
+      const blueHref = tjhpDeepDivePriorAuthComparedWorkHref(blueSignal, ["BlueCross", "Cigna"]);
+      assertIncludes(blueHref, "pa_payers=");
+      assertIncludes(decodeURIComponent(blueHref), "BlueCross||Cigna");
+      assert(!decodeURIComponent(blueHref).includes("Blue Cross Blue Shield of Texas"), "compared href expanded a related payer family");
+
+      const similarText = tjhpDeepDiveRiskGapText({ higherRiskPayer:"Aetna", riskDelta:0 }, {});
+      assert.strictEqual(similarText, "At-risk exposure is similar", "zero risk delta text mismatch");
+      const noClaimText = tjhpDeepDiveRiskGapText({ higherRiskPayer:"Aetna", riskDelta:1133 }, { any_prior_auth_only:true });
+      assert.strictEqual(noClaimText, "No claims/payment history for one payer", "prior-auth-only limited-data text mismatch");
+    } finally {
+      fs.writeFileSync(FILES.prior_auth_cases, snapshot);
+    }
+    process.stdout.write("REVENUE_INTELLIGENCE_DEEP_DIVE_TWO_PAYER_PA_WORK_LINK_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) { process.stderr.write("REVENUE_INTELLIGENCE_DEEP_DIVE_TWO_PAYER_PA_WORK_LINK_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
 }
 
 if (process.env.TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_PRIOR_AUTH_PAYER_UNIVERSE_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
